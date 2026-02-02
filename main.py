@@ -549,15 +549,27 @@ def menu_handler(m):
     chat_id = m.chat.id
     txt = (m.text or "").strip()
 
-    if txt == "🚀 Начать действие":
+ if txt == "🚀 Начать действие":
+    ok, reason = can_use_today(chat_id)
+    if not ok:
+        bot.send_message(chat_id, reason, reply_markup=menu_kb())
+        return
+
+    cancel_all_timers(chat_id)
+    reset_session(chat_id)
+    user_data[chat_id]["step"] = "energy"
+
     bot.send_message(
         chat_id,
         "Отлично 👍\n"
         "Давай сначала определим твою энергию,\n"
         "чтобы выбрать подходящее действие.\n\n"
-        "Твоя энергия сейчас?"
+        "Твоя энергия сейчас?",
+        reply_markup=energy_kb()
     )
-    show_energy_buttons(chat_id)  # твоя функция с кнопками энергии
+    log(chat_id, "start_flow", "ok")
+    return
+
 
         return
     if txt == "👤 Профиль":
@@ -1123,4 +1135,5 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
+
 
