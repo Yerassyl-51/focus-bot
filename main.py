@@ -533,7 +533,16 @@ def show_premium(chat_id: int):
 
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
-    start_flow(m.chat.id)
+    bot.send_message(
+        m.chat.id,
+        "Привет! 👋\n"
+        "Я помогу быстро выбрать одно главное действие и аккуратно поддержу,\n"
+        "чтобы ты не бросил.\n\n"
+        "Нажми 🚀 Начать действие.",
+        reply_markup=menu_kb()
+    )
+
+
 
 @bot.message_handler(func=lambda m: (m.text or "").strip() in MENU_TEXTS)
 def menu_handler(m):
@@ -541,7 +550,15 @@ def menu_handler(m):
     txt = (m.text or "").strip()
 
     if txt == "🚀 Начать действие":
-        start_flow(chat_id)
+    bot.send_message(
+        chat_id,
+        "Отлично 👍\n"
+        "Давай сначала определим твою энергию,\n"
+        "чтобы выбрать подходящее действие.\n\n"
+        "Твоя энергия сейчас?"
+    )
+    show_energy_buttons(chat_id)  # твоя функция с кнопками энергии
+
         return
     if txt == "👤 Профиль":
         show_profile(chat_id)
@@ -1106,3 +1123,4 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
+
