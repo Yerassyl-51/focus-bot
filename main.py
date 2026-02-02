@@ -26,6 +26,7 @@ if ADMIN_IDS_ENV:
         x = x.strip()
         if x.isdigit():
             ADMIN_IDS.add(int(x))
+
 # fallback если не задано
 if not ADMIN_IDS:
     ADMIN_IDS = {8311003582}
@@ -158,14 +159,24 @@ def can_use_today(chat_id: int) -> Tuple[bool, str]:
 
     if plan in ("month", "two_month", "day"):
         return True, ""
+
     if plan == "week":
         if used < WEEK_DAILY_USES:
             return True, ""
-        return False, f"⛔ Лимит на сегодня исчерпан.\nПлан: <b>{PLAN_TITLES[plan]}</b>\nЛимит: <b>{WEEK_DAILY_USES}</b> раз/день."
+        return False, (
+            "⛔ Лимит на сегодня исчерпан.\n"
+            f"План: <b>{PLAN_TITLES[plan]}</b>\n"
+            f"Лимит: <b>{WEEK_DAILY_USES}</b> раз/день."
+        )
+
     # free
     if used < FREE_DAILY_USES:
         return True, ""
-    return False, f"⛔ Лимит на сегодня исчерпан.\nПлан: <b>{PLAN_TITLES['free']}</b>\nЛимит: <b>{FREE_DAILY_USES}</b> раза/день."
+    return False, (
+        "⛔ Лимит на сегодня исчерпан.\n"
+        f"План: <b>{PLAN_TITLES['free']}</b>\n"
+        f"Лимит: <b>{FREE_DAILY_USES}</b> раза/день."
+    )
 
 # =========================
 # SESSION MEMORY + TIMERS
@@ -212,7 +223,7 @@ def reset_session(chat_id: int):
         "result_locked": False,
 
         # coaching
-        "check_count": 0,  # for two_month loops
+        "check_count": 0,  # reserved for future
     }
 
 def cancel_timer(chat_id: int, key: str):
@@ -287,16 +298,13 @@ def result_kb(plan: str):
         types.InlineKeyboardButton("🚀 Я начал", callback_data="res:start"),
         types.InlineKeyboardButton("⏸ Отложить 10 минут", callback_data="res:delay10"),
     )
-    # 30 минут — только для two_month и month/day (премиум)
     if plan in ("two_month", "month", "day"):
         kb.add(
             types.InlineKeyboardButton("🕒 Попозже (30 минут)", callback_data="res:delay30"),
             types.InlineKeyboardButton("❌ Не хочу сейчас", callback_data="res:skip"),
         )
     else:
-        kb.add(
-            types.InlineKeyboardButton("❌ Не хочу сейчас", callback_data="res:skip"),
-        )
+        kb.add(types.InlineKeyboardButton("❌ Не хочу сейчас", callback_data="res:skip"))
     return kb
 
 def progress_kb():
@@ -326,7 +334,7 @@ def premium_menu_kb():
     return kb
 
 # =========================
-# MOTIVATION POOLS (как ты написал)
+# MOTIVATION POOLS
 # =========================
 MOTIVATION_START_BY_TYPE = {
     "mental": [
@@ -415,8 +423,8 @@ def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
     best = None
     best_score = -10**9
     for a in data["actions"]:
-        s = a["scores"]  # dict
-        energy_bonus = 6 - s["energy"]
+        s = a["scores"]
+        energy_bonus = 6 - s["energy"]  # energy: 1 easy ... 5 hard
         total = (
             s["influence"] * 2 +
             s["urgency"] * 2 +
@@ -429,7 +437,7 @@ def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
     return best
 
 # =========================
-# FLOWS: START / MENU
+# FLOWS: START / MENU ✅
 # =========================
 def send_welcome(chat_id: int):
     bot.send_message(
@@ -440,7 +448,7 @@ def send_welcome(chat_id: int):
         reply_markup=menu_kb()
     )
 
-def start_flow(chat_id: int):
+def start_energy_flow(chat_id: int):
     ok, reason = can_use_today(chat_id)
     if not ok:
         bot.send_message(chat_id, reason, reply_markup=menu_kb())
@@ -448,16 +456,24 @@ def start_flow(chat_id: int):
 
     cancel_all_timers(chat_id)
     reset_session(chat_id)
-
     user_data[chat_id]["step"] = "energy"
-    send_welcome(chat_id)
+
+    bot.send_message(
+        chat_id,
+        "Отлично 👍\n"
+        "Давай сначала определим твою энергию,\n"
+        "чтобы выбрать подходящее действие.",
+        reply_markup=menu_kb()
+    )
 
     msg = bot.send_message(chat_id, "Твоя энергия сейчас?", reply_markup=energy_kb())
     user_data[chat_id]["energy_msg_id"] = msg.message_id
-    log(chat_id, "start_flow", "ok")
+    user_data[chat_id]["energy_locked"] = False
+
+    log(chat_id, "start_energy_flow", "ok")
 
 def show_profile(chat_id: int):
-    plan, exp = get_sub(chat_id)
+    p, exp = get_sub(chat_id)
     eff = effective_plan(chat_id)
     plan_title = PLAN_TITLES.get(eff, eff)
 
@@ -471,7 +487,7 @@ def show_profile(chat_id: int):
         exp_text = exp.strftime("%Y-%m-%d %H:%M")
     else:
         limit_text = "без лимита"
-        exp_text = exp.strftime("%Y-%m-%d %H:%M")
+        exp_text = exp.strftime("%Y-%m-%d %H:%M") if is_active(p, exp) else "—"
 
     is_admin = "✅" if chat_id in ADMIN_IDS else "—"
 
@@ -533,44 +549,15 @@ def show_premium(chat_id: int):
 
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
-    bot.send_message(
-        m.chat.id,
-        "Привет! 👋\n"
-        "Я помогу быстро выбрать одно главное действие и аккуратно поддержу,\n"
-        "чтобы ты не бросил.\n\n"
-        "Нажми 🚀 Начать действие.",
-        reply_markup=menu_kb()
-    )
-
-
+    send_welcome(m.chat.id)
 
 @bot.message_handler(func=lambda m: (m.text or "").strip() in MENU_TEXTS)
 def menu_handler(m):
     chat_id = m.chat.id
     txt = (m.text or "").strip()
 
- if txt == "🚀 Начать действие":
-    ok, reason = can_use_today(chat_id)
-    if not ok:
-        bot.send_message(chat_id, reason, reply_markup=menu_kb())
-        return
-
-    cancel_all_timers(chat_id)
-    reset_session(chat_id)
-    user_data[chat_id]["step"] = "energy"
-
-    bot.send_message(
-        chat_id,
-        "Отлично 👍\n"
-        "Давай сначала определим твою энергию,\n"
-        "чтобы выбрать подходящее действие.\n\n"
-        "Твоя энергия сейчас?",
-        reply_markup=energy_kb()
-    )
-    log(chat_id, "start_flow", "ok")
-    return
-
-
+    if txt == "🚀 Начать действие":
+        start_energy_flow(chat_id)
         return
     if txt == "👤 Профиль":
         show_profile(chat_id)
@@ -597,11 +584,11 @@ def energy_pick(call):
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
 
-    if data["energy_msg_id"] and call.message.message_id != data["energy_msg_id"]:
+    if data.get("energy_msg_id") and call.message.message_id != data["energy_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
 
-    if data["energy_locked"]:
+    if data.get("energy_locked"):
         bot.answer_callback_query(call.id, "✅ Энергия уже выбрана")
         return
 
@@ -612,7 +599,6 @@ def energy_pick(call):
 
     log(chat_id, "energy", lvl)
 
-    # фиксируем и убираем кнопки
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -627,7 +613,11 @@ def energy_pick(call):
         pass
 
     bot.answer_callback_query(call.id, "Ок ✅")
-    bot.send_message(chat_id, "✍️ Напиши <b>минимум 3</b> действия (каждое с новой строки):", reply_markup=menu_kb())
+    bot.send_message(
+        chat_id,
+        "✍️ Напиши <b>минимум 3</b> действия (каждое с новой строки):",
+        reply_markup=menu_kb()
+    )
 
 # =========================
 # ACTIONS INPUT
@@ -636,7 +626,7 @@ def energy_pick(call):
 def actions_input(m):
     chat_id = m.chat.id
     if (m.text or "").strip() in MENU_TEXTS:
-        return  # меню обработает menu_handler
+        return
 
     data = user_data[chat_id]
     lines = [x.strip() for x in (m.text or "").split("\n") if x.strip()]
@@ -672,7 +662,7 @@ def type_pick(call):
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
 
-    if data["expected_type_msg_id"] and call.message.message_id != data["expected_type_msg_id"]:
+    if data.get("expected_type_msg_id") and call.message.message_id != data["expected_type_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
 
@@ -686,7 +676,6 @@ def type_pick(call):
     data["answered_type_msgs"].add(call.message.message_id)
     log(chat_id, "type", t)
 
-    # фиксируем
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -740,7 +729,7 @@ def score_pick(call):
         bot.answer_callback_query(call.id, "Сейчас не время 🙂")
         return
 
-    if data["expected_score_msg_id"] and call.message.message_id != data["expected_score_msg_id"]:
+    if data.get("expected_score_msg_id") and call.message.message_id != data["expected_score_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
 
@@ -756,7 +745,6 @@ def score_pick(call):
     data["answered_score_msgs"].add(call.message.message_id)
     log(chat_id, "score", f"{key}={score}")
 
-    # фиксируем
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -795,8 +783,7 @@ def show_result(chat_id: int):
     data["focus"] = best["name"]
     data["focus_type"] = best.get("type")
 
-    # событие "focus" — это и есть дневной лимит
-    log(chat_id, "focus", best["name"])
+    log(chat_id, "focus", best["name"])  # daily limit
 
     plan = effective_plan(chat_id)
 
@@ -810,7 +797,7 @@ def show_result(chat_id: int):
     data["result_msg_id"] = msg.message_id
 
 # =========================
-# TIMERS (check/remind/support)
+# TIMERS
 # =========================
 def schedule_check(chat_id: int, minutes: int = 10):
     cancel_timer(chat_id, "check")
@@ -841,7 +828,6 @@ def schedule_remind(chat_id: int, minutes: int):
     t.start()
 
 def schedule_support_after_ok_two_month(chat_id: int):
-    """For two_month: after OK, we send one extra short support after 10 min (no question)."""
     cancel_timer(chat_id, "support")
 
     def support():
@@ -859,12 +845,12 @@ def schedule_support_after_ok_two_month(chat_id: int):
         except Exception:
             pass
 
-    t = threading.Timer(10 * 60, support)
-    timers.setdefault(chat_id, {})["support"] = t
-    t.start()
+    tmr = threading.Timer(10 * 60, support)
+    timers.setdefault(chat_id, {})["support"] = tmr
+    tmr.start()
 
 # =========================
-# RESULT BUTTONS (4 варианта)
+# RESULT BUTTONS
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("res:"))
 def result_actions(call):
@@ -875,7 +861,6 @@ def result_actions(call):
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
 
-    # only current result message
     if data.get("result_msg_id") and call.message.message_id != data["result_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
@@ -899,16 +884,10 @@ def result_actions(call):
         cancel_all_timers(chat_id)
         log(chat_id, "started", focus)
 
-        # 1) отдельно: Ты начал
         bot.send_message(chat_id, f"🚀 Ты начал: <b>{focus}</b>")
-
-        # 2) отдельно: мотивация
         bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_START_BY_TYPE, t)}")
-
-        # 3) отдельно: не отвлекаю + чек
         bot.send_message(chat_id, "Я не буду отвлекать.\nЧерез 10 минут спрошу, как идёт.")
 
-        # чек через 10 (всегда)
         schedule_check(chat_id, 10)
 
         data["step"] = "started"
@@ -925,7 +904,6 @@ def result_actions(call):
         return
 
     if cmd == "delay30":
-        # доступно только premium
         if plan not in ("two_month", "month", "day"):
             bot.send_message(chat_id, "🕒 30 минут доступно в Premium.", reply_markup=menu_kb())
             data["step"] = "idle"
@@ -966,7 +944,6 @@ def progress_handler(call):
 
     log(chat_id, "progress", val)
 
-    # уберём кнопки у вопроса, чтобы не тыкали повторно
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -975,11 +952,8 @@ def progress_handler(call):
     if val == "ok":
         bot.send_message(chat_id, "👍 Принято: Норм.")
         bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_OK_BY_TYPE, t)}")
-
-        # two_month: ещё одна поддержка через 10 минут (без вопроса)
         if plan == "two_month":
             schedule_support_after_ok_two_month(chat_id)
-
         bot.answer_callback_query(call.id, "✅")
         return
 
@@ -1012,7 +986,7 @@ def quit_handler(call):
 
     if cmd == "retry":
         bot.send_message(chat_id, "Ок. Начнём заново — выбери шаг поменьше 🙂", reply_markup=menu_kb())
-        start_flow(chat_id)
+        start_energy_flow(chat_id)
         bot.answer_callback_query(call.id, "Ок")
         return
 
@@ -1022,7 +996,7 @@ def quit_handler(call):
         return
 
     if cmd == "new":
-        start_flow(chat_id)
+        start_energy_flow(chat_id)
         bot.answer_callback_query(call.id, "Ок")
         return
 
@@ -1061,8 +1035,7 @@ def buy_handler(call):
     desc = f"Доступ к Premium на {PLAN_DAYS[plan]} дней"
     payload = f"sub:{plan}:{chat_id}:{int(time.time())}"
 
-    prices = [types.LabeledPrice(label=title, amount=price * 100)]  # Telegram: в "копейках" (для KZT часто *100)
-    # Если вдруг у провайдера KZT идёт без *100 — тогда поставишь amount=price
+    prices = [types.LabeledPrice(label=title, amount=price * 100)]
 
     bot.answer_callback_query(call.id, "Открываю оплату…")
     bot.send_invoice(
@@ -1084,7 +1057,6 @@ def pre_checkout(pre_checkout_q):
 def successful_payment(m):
     chat_id = m.chat.id
     payload = (m.successful_payment.invoice_payload or "")
-    # payload: sub:plan:chat_id:ts
     try:
         parts = payload.split(":")
         if len(parts) >= 2 and parts[0] == "sub":
@@ -1099,23 +1071,25 @@ def successful_payment(m):
     bot.send_message(chat_id, "✅ Оплата получена. Но я не смог распознать план. Напиши в поддержку/админу.", reply_markup=menu_kb())
 
 # =========================
-# OPTIONAL: ADMIN grant (ручная выдача)
+# ADMIN grant (ручная выдача)
 # =========================
 @bot.message_handler(commands=["grant"])
 def grant_cmd(m):
     chat_id = m.chat.id
     if chat_id not in ADMIN_IDS:
         return
-    # формат: /grant <user_id> <plan>
+
     parts = (m.text or "").split()
     if len(parts) < 3:
         bot.send_message(chat_id, "Формат: /grant <user_id> <day|week|month|two_month>", reply_markup=menu_kb())
         return
+
     uid = parts[1].strip()
     plan = parts[2].strip()
     if not uid.isdigit() or plan not in PLAN_DAYS:
         bot.send_message(chat_id, "Ошибка. Пример: /grant 123456789 month", reply_markup=menu_kb())
         return
+
     uid_i = int(uid)
     set_sub(uid_i, plan, PLAN_DAYS[plan])
     bot.send_message(chat_id, f"✅ Выдал {PLAN_TITLES[plan]} пользователю {uid_i}", reply_markup=menu_kb())
@@ -1130,10 +1104,7 @@ if __name__ == "__main__":
     try:
         bot.infinity_polling(skip_pending=True, none_stop=True, timeout=60, long_polling_timeout=60)
     except ApiTelegramException as e:
-        # ВАЖНО: если 409 — не перезапускаем бесконечно, иначе ты не увидишь проблему
         if "409" in str(e):
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
-
-
