@@ -831,10 +831,28 @@ def admin_decision(call):
             log(user_id, "manual_pay_approved", plan)
 
         if remain > 0:
-            bot.send_message(admin_id, f"⏳ Проверка… (подтверждение через ~{int(remain)} сек)")
-            threading.Timer(remain, activate_subscription).start()
-        else:
-            activate_subscription()
+    # админу
+    bot.send_message(admin_id, f"⏳ Проверка… (подтверждение через ~{int(remain)} сек)")
+
+    # клиенту тоже (перед финальным подтверждением)
+    def notify_client_then_activate():
+        try:
+            bot.send_message(user_id, "⏳")
+        except Exception:
+            pass
+        activate_subscription()
+
+    threading.Timer(remain, notify_client_then_activate).start()
+else:
+    # если админ нажал поздно и 10–15 сек уже прошло —
+    # всё равно покажем клиенту "⏳ Проверка…" и сразу подтвердим
+    try:
+        bot.send_message(user_id, "⏳ Проверка…")
+    except Exception:
+        pass
+    activate_subscription()
+
+
 
         bot.answer_callback_query(call.id, "Ок ✅")
         return
@@ -855,3 +873,4 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
+
