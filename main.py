@@ -794,6 +794,7 @@ def admin_decision(call):
     user_id = int(parts[2].strip())
     plan = parts[3].strip()
 
+    # убираем кнопки у админа (чтобы не нажали 2 раза)
     try:
         bot.edit_message_reply_markup(admin_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -808,14 +809,22 @@ def admin_decision(call):
         bot.answer_callback_query(call.id, "Неизвестный план")
         return
 
+    # ========= REJECT =========
     if action == "reject":
         PENDING_PAYMENTS.pop(user_id, None)
+
         bot.send_message(admin_id, f"❌ Отклонено. Пользователь <code>{user_id}</code>.")
-        bot.send_message(user_id, "❌ Не удалось подтвердить оплату.\nПроверь чек и попробуй снова.", reply_markup=menu_kb())
+        bot.send_message(
+            user_id,
+            "❌ Не удалось подтвердить оплату.\nПроверь чек и попробуй снова.",
+            reply_markup=menu_kb()
+        )
         log(user_id, "manual_pay_rejected", plan)
+
         bot.answer_callback_query(call.id, "Ок ❌")
         return
 
+    # ========= APPROVE =========
     if action == "approve":
         receipt_ts = pending.get("receipt_ts") or time.time()
         review_delay = pending.get("review_delay") or random.randint(10, 15)
@@ -826,39 +835,41 @@ def admin_decision(call):
         def activate_subscription():
             set_sub(user_id, plan, PLAN_DAYS[plan])
             PENDING_PAYMENTS.pop(user_id, None)
+
             bot.send_message(admin_id, f"✅ Подтверждено. Подписка активирована пользователю <code>{user_id}</code>.")
-            bot.send_message(user_id, f"✅ Оплата подтверждена!\nPremium активирован: <b>{PLAN_TITLES[plan]}</b>", reply_markup=menu_kb())
+            bot.send_message(
+                user_id,
+                f"✅ Оплата подтверждена!\nPremium активирован: <b>{PLAN_TITLES[plan]}</b>",
+                reply_markup=menu_kb()
+            )
             log(user_id, "manual_pay_approved", plan)
 
         if remain > 0:
-    # админу
-    bot.send_message(admin_id, f"⏳ Проверка… (подтверждение через ~{int(remain)} сек)")
+            # админу
+            bot.send_message(admin_id, f"⏳ Проверка… (подтверждение через ~{int(remain)} сек)")
 
-    # клиенту тоже (перед финальным подтверждением)
-    def notify_client_then_activate():
-        try:
-            bot.send_message(user_id, "⏳")
-        except Exception:
-            pass
-        activate_subscription()
+            # клиенту тоже
+            def notify_client_then_activate():
+                try:
+                    bot.send_message(user_id, "⏳ Проверка…")
+                except Exception:
+                    pass
+                activate_subscription()
 
-    threading.Timer(remain, notify_client_then_activate).start()
-else:
-    # если админ нажал поздно и 10–15 сек уже прошло —
-    # всё равно покажем клиенту "⏳ Проверка…" и сразу подтвердим
-    try:
-        bot.send_message(user_id, "⏳ Проверка…")
-    except Exception:
-        pass
-    activate_subscription()
-
-
+            threading.Timer(remain, notify_client_then_activate).start()
+        else:
+            # если 10–15 сек уже прошло — показываем "проверка" и сразу подтверждаем
+            try:
+                bot.send_message(user_id, "⏳ Проверка…")
+            except Exception:
+                pass
+            activate_subscription()
 
         bot.answer_callback_query(call.id, "Ок ✅")
         return
 
+    # ========= UNKNOWN =========
     bot.answer_callback_query(call.id, "Неизвестная команда")
-
 
 # =========================
 # RUN
@@ -873,4 +884,5 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
+
 
