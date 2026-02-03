@@ -17,17 +17,21 @@ TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 
-PROVIDER_TOKEN = (os.getenv("PROVIDER_TOKEN") or "").strip()  # optional (Telegram Payments)
+# Если хочешь Telegram Payments — задай PROVIDER_TOKEN и включи PAY_MODE="telegram"
+PROVIDER_TOKEN = (os.getenv("PROVIDER_TOKEN") or "").strip()
+PAY_MODE = (os.getenv("PAY_MODE") or "manual").strip().lower()  # manual | telegram
+
+# Реквизиты для ручной оплаты (Kaspi)
+KASPI_PHONE = (os.getenv("KASPI_PHONE") or "+7 XXX XXX XX XX").strip()
+KASPI_NAME = (os.getenv("KASPI_NAME") or "YOUR NAME").strip()
 
 ADMIN_IDS_ENV = (os.getenv("ADMIN_IDS") or "").strip()
-ADMIN_IDS = set()
+ADMIN_IDS: set[int] = set()
 if ADMIN_IDS_ENV:
     for x in ADMIN_IDS_ENV.split(","):
         x = x.strip()
         if x.isdigit():
             ADMIN_IDS.add(int(x))
-
-# fallback если не задано
 if not ADMIN_IDS:
     ADMIN_IDS = {8311003582}
 
@@ -37,9 +41,9 @@ bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 # =========================
 # LIMITS
 # =========================
-FREE_DAILY_USES = 3          # free: 3 раза/день
-WEEK_DAILY_USES = 5          # week: 5 раз/день (пример ограничения)
-# month/day/2month: unlimited daily uses
+FREE_DAILY_USES = 3
+WEEK_DAILY_USES = 5
+# month/day/two_month: unlimited daily uses
 
 # =========================
 # DATABASE
@@ -94,7 +98,6 @@ def count_today(chat_id: int, event: str) -> int:
 # =========================
 # SUBSCRIPTIONS
 # =========================
-# plans: free, day, week, month, two_month
 PLAN_TITLES = {
     "free": "Free",
     "day": "Day (пробная)",
@@ -110,8 +113,14 @@ PLAN_DAYS = {
     "two_month": 60,
 }
 
+PLAN_PRICES_KZT = {
+    "day": 299,
+    "week": 399,
+    "month": 1499,
+    "two_month": 2299,
+}
+
 def get_sub(chat_id: int) -> Tuple[str, datetime]:
-    """return (plan, expires_dt). If no sub -> free and expires in past."""
     with db_lock, db() as c:
         cur = c.cursor()
         cur.execute("SELECT plan, expires_at FROM subscriptions WHERE chat_id=?", (chat_id,))
@@ -134,7 +143,7 @@ def is_active(plan: str, exp: datetime) -> bool:
 
 def effective_plan(chat_id: int) -> str:
     if chat_id in ADMIN_IDS:
-        return "two_month"  # админ как максимальный
+        return "two_month"
     plan, exp = get_sub(chat_id)
     return plan if is_active(plan, exp) else "free"
 
@@ -150,7 +159,6 @@ def set_sub(chat_id: int, plan: str, days: int):
     log(chat_id, "sub_set", f"{plan}|{exp.isoformat()}")
 
 def can_use_today(chat_id: int) -> Tuple[bool, str]:
-    """daily usage limit based on plan. usage counted by event 'focus'."""
     if chat_id in ADMIN_IDS:
         return True, ""
 
@@ -169,7 +177,6 @@ def can_use_today(chat_id: int) -> Tuple[bool, str]:
             f"Лимит: <b>{WEEK_DAILY_USES}</b> раз/день."
         )
 
-    # free
     if used < FREE_DAILY_USES:
         return True, ""
     return False, (
@@ -200,14 +207,13 @@ HINTS = {
 
 def reset_session(chat_id: int):
     user_data[chat_id] = {
-        # flow: idle -> energy -> actions -> typing -> scoring -> result -> started/delayed/idle
         "step": "idle",
 
         "energy_now": None,
         "energy_msg_id": None,
         "energy_locked": False,
 
-        "actions": [],  # [{"name":..., "type":..., "scores":{...}}]
+        "actions": [],
         "cur_action": 0,
         "cur_crit": 0,
 
@@ -222,8 +228,7 @@ def reset_session(chat_id: int):
         "result_msg_id": None,
         "result_locked": False,
 
-        # coaching
-        "check_count": 0,  # reserved for future
+        "check_count": 0,
     }
 
 def cancel_timer(chat_id: int, key: str):
@@ -243,11 +248,26 @@ def cancel_all_timers(chat_id: int):
 # =========================
 # UI
 # =========================
-MENU_TEXTS = {"🚀 Начать действие", "⭐ Premium", "👤 Профиль", "📊 Статистика", "❓ Как пользоваться"}
+MENU_TEXTS = {
+    "🚀 Начать действие",
+    "⭐ Premium",
+    "👤 Профиль",
+    "📊 Статистика",
+    "❓ Как пользоваться",
+    "💳 Оплатил / Отправить чек",
+}
 
 def menu_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("🚀 Начать действие", "⭐ Premium")
+    kb.row("📊 Статистика", "👤 Профиль")
+    kb.row("❓ Как пользоваться")
+    return kb
+
+def payment_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("💳 Оплатил / Отправить чек", "⭐ Premium")
+    kb.row("🚀 Начать действие")
     kb.row("📊 Статистика", "👤 Профиль")
     kb.row("❓ Как пользоваться")
     return kb
@@ -262,7 +282,7 @@ def energy_kb():
     return kb
 
 def energy_label(code: str) -> str:
-    return {"high":"🔋 Высокая", "mid":"😐 Средняя", "low":"🪫 Низкая"}.get(code, code)
+    return {"high": "🔋 Высокая", "mid": "😐 Средняя", "low": "🪫 Низкая"}.get(code, code)
 
 def type_kb():
     kb = types.InlineKeyboardMarkup()
@@ -331,6 +351,19 @@ def premium_menu_kb():
     kb.add(types.InlineKeyboardButton("🟡 Week (399₸)", callback_data="buy:week"))
     kb.add(types.InlineKeyboardButton("🟠 Month (1499₸)", callback_data="buy:month"))
     kb.add(types.InlineKeyboardButton("🔴 2 Month (2299₸)", callback_data="buy:two_month"))
+    return kb
+
+# =========================
+# MANUAL PAY (Kaspi) - NO OCR
+# =========================
+PENDING_PAYMENTS: Dict[int, Dict[str, Any]] = {}   # user_id -> {"plan":..., "ts":...}
+
+def admin_review_kb(user_id: int, plan: str):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin:approve:{user_id}:{plan}"),
+        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admin:reject:{user_id}:{plan}")
+    )
     return kb
 
 # =========================
@@ -424,7 +457,7 @@ def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
     best_score = -10**9
     for a in data["actions"]:
         s = a["scores"]
-        energy_bonus = 6 - s["energy"]  # energy: 1 easy ... 5 hard
+        energy_bonus = 6 - s["energy"]
         total = (
             s["influence"] * 2 +
             s["urgency"] * 2 +
@@ -437,7 +470,7 @@ def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
     return best
 
 # =========================
-# FLOWS: START / MENU ✅
+# FLOWS: START / MENU
 # =========================
 def send_welcome(chat_id: int):
     bot.send_message(
@@ -469,7 +502,6 @@ def start_energy_flow(chat_id: int):
     msg = bot.send_message(chat_id, "Твоя энергия сейчас?", reply_markup=energy_kb())
     user_data[chat_id]["energy_msg_id"] = msg.message_id
     user_data[chat_id]["energy_locked"] = False
-
     log(chat_id, "start_energy_flow", "ok")
 
 def show_profile(chat_id: int):
@@ -534,7 +566,6 @@ def show_premium(chat_id: int):
     p, exp = get_sub(chat_id)
     exp_text = exp.strftime("%Y-%m-%d %H:%M") if is_active(p, exp) else "—"
 
-    # лимиты по планам (для отображения)
     if plan == "free":
         limits = f"{FREE_DAILY_USES} выбора/день"
     elif plan == "week":
@@ -542,43 +573,38 @@ def show_premium(chat_id: int):
     else:
         limits = "без лимита"
 
+    pay_hint = "💳 Оплата: <b>Kaspi (чек → подтверждение)</b>" if PAY_MODE == "manual" else "💳 Оплата: <b>Telegram Payments</b>"
+
     text = (
         "⭐ <b>Premium</b>\n\n"
-        "<b>Текущий план:</b> "
-        f"<b>{PLAN_TITLES.get(plan, plan)}</b>\n"
+        f"<b>Текущий план:</b> <b>{PLAN_TITLES.get(plan, plan)}</b>\n"
         f"<b>Активен до:</b> <b>{exp_text}</b>\n"
-        f"<b>Лимит:</b> <b>{limits}</b>\n\n"
+        f"<b>Лимит:</b> <b>{limits}</b>\n"
+        f"{pay_hint}\n\n"
         "━━━━━━━━━━━━━━━━\n"
         "<b>Планы:</b>\n\n"
-
         "🟢 <b>Day — 299₸</b>\n"
         "• Как <b>Month</b>, но на <b>1 день</b>\n"
         "• Без дневного лимита\n"
         "• Кнопка “🕒 30 минут” доступна\n\n"
-
         "🟡 <b>Week — 399₸</b>\n"
         f"• Лимит выше: <b>{WEEK_DAILY_USES}</b> выборов/день\n"
         "• Базовые напоминания\n"
-        "• Кнопка “🕒 30 минут” <b>недоступна</b>\n\n"
-
+        "• “🕒 30 минут” <b>недоступна</b>\n\n"
         "🟠 <b>Month — 1499₸</b>\n"
         "• Без дневного лимита\n"
         "• “🕒 30 минут” доступно\n"
         "• 1 чек через 10 минут на действие (вопрос “Как идёт?”)\n\n"
-
         "🔴 <b>2 Month — 2299₸</b>\n"
         "• Без дневного лимита\n"
         "• “🕒 30 минут” доступно\n"
         "• Расширенный режим поддержки:\n"
         "  – чек через 10 минут (“Как идёт?”)\n"
-        "  – если ответ “👍 Норм” → ещё поддержка через 10 минут (без вопроса)\n\n"
-
+        "  – если “👍 Норм” → ещё поддержка через 10 минут (без вопроса)\n\n"
         "━━━━━━━━━━━━━━━━\n"
         "Выбери план:"
     )
-
     bot.send_message(chat_id, text, reply_markup=premium_menu_kb())
-
 
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
@@ -603,6 +629,14 @@ def menu_handler(m):
         return
     if txt == "⭐ Premium":
         show_premium(chat_id)
+        return
+    if txt == "💳 Оплатил / Отправить чек":
+        if chat_id not in PENDING_PAYMENTS:
+            bot.send_message(chat_id, "Сначала выбери план в ⭐ Premium.", reply_markup=menu_kb())
+            return
+        user_data.setdefault(chat_id, {})
+        user_data[chat_id]["step"] = "wait_receipt"
+        bot.send_message(chat_id, "Ок ✅ Пришли чек сюда (фото или PDF).")
         return
 
 # =========================
@@ -646,11 +680,7 @@ def energy_pick(call):
         pass
 
     bot.answer_callback_query(call.id, "Ок ✅")
-    bot.send_message(
-        chat_id,
-        "✍️ Напиши <b>минимум 3</b> действия (каждое с новой строки):",
-        reply_markup=menu_kb()
-    )
+    bot.send_message(chat_id, "✍️ Напиши <b>минимум 3</b> действия (каждое с новой строки):", reply_markup=menu_kb())
 
 # =========================
 # ACTIONS INPUT
@@ -797,7 +827,6 @@ def score_pick(call):
     if data["cur_crit"] >= len(CRITERIA):
         data["cur_crit"] = 0
         data["cur_action"] += 1
-
         if data["cur_action"] >= len(data["actions"]):
             show_result(chat_id)
             return
@@ -815,11 +844,9 @@ def show_result(chat_id: int):
     best = pick_best_local(data)
     data["focus"] = best["name"]
     data["focus_type"] = best.get("type")
-
-    log(chat_id, "focus", best["name"])  # daily limit
+    log(chat_id, "focus", best["name"])
 
     plan = effective_plan(chat_id)
-
     msg = bot.send_message(
         chat_id,
         "🔥 <b>Главное действие сейчас:</b>\n\n"
@@ -920,7 +947,6 @@ def result_actions(call):
         bot.send_message(chat_id, f"🚀 Ты начал: <b>{focus}</b>")
         bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_START_BY_TYPE, t)}")
         bot.send_message(chat_id, "Я не буду отвлекать.\nЧерез 10 минут спрошу, как идёт.")
-
         schedule_check(chat_id, 10)
 
         data["step"] = "started"
@@ -966,7 +992,6 @@ def result_actions(call):
 def progress_handler(call):
     chat_id = call.message.chat.id
     data = user_data.get(chat_id)
-
     if not data:
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
@@ -974,7 +999,6 @@ def progress_handler(call):
     val = call.data.split(":", 1)[1]
     t = data.get("focus_type")
     plan = effective_plan(chat_id)
-
     log(chat_id, "progress", val)
 
     try:
@@ -1034,15 +1058,8 @@ def quit_handler(call):
         return
 
 # =========================
-# PREMIUM BUY (Telegram Payments)
+# PREMIUM BUY
 # =========================
-PLAN_PRICES_KZT = {
-    "day": 299,
-    "week": 399,
-    "month": 1499,
-    "two_month": 2299,
-}
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("buy:"))
 def buy_handler(call):
     chat_id = call.message.chat.id
@@ -1052,42 +1069,58 @@ def buy_handler(call):
         bot.answer_callback_query(call.id, "Ошибка")
         return
 
-    if not PROVIDER_TOKEN:
-        bot.answer_callback_query(call.id, "Оплата не настроена")
-        bot.send_message(
-            chat_id,
-            "⚠️ Оплата пока не подключена (нет PROVIDER_TOKEN).\n"
-            "Можно подключить Telegram Payments или включить вручную через админа.\n\n"
-            "Если хочешь — я добавлю команду админа /grant.",
-            reply_markup=menu_kb()
+    # ===== MODE: TELEGRAM PAYMENTS =====
+    if PAY_MODE == "telegram":
+        if not PROVIDER_TOKEN:
+            bot.answer_callback_query(call.id, "Оплата не настроена")
+            bot.send_message(chat_id, "⚠️ PAY_MODE=telegram, но нет PROVIDER_TOKEN.", reply_markup=menu_kb())
+            return
+
+        price = PLAN_PRICES_KZT[plan]
+        title = f"Premium {PLAN_TITLES[plan]}"
+        desc = f"Доступ к Premium на {PLAN_DAYS[plan]} дней"
+        payload = f"sub:{plan}:{chat_id}:{int(time.time())}"
+        prices = [types.LabeledPrice(label=title, amount=price * 100)]
+
+        bot.answer_callback_query(call.id, "Открываю оплату…")
+        bot.send_invoice(
+            chat_id=chat_id,
+            title=title,
+            description=desc,
+            provider_token=PROVIDER_TOKEN,
+            currency="KZT",
+            prices=prices,
+            start_parameter="premium",
+            payload=payload
         )
         return
 
-    price = PLAN_PRICES_KZT[plan]
-    title = f"Premium {PLAN_TITLES[plan]}"
-    desc = f"Доступ к Premium на {PLAN_DAYS[plan]} дней"
-    payload = f"sub:{plan}:{chat_id}:{int(time.time())}"
+    # ===== MODE: MANUAL (Kaspi) =====
+    PENDING_PAYMENTS[chat_id] = {"plan": plan, "ts": time.time()}
+    bot.answer_callback_query(call.id, "Ок ✅")
 
-    prices = [types.LabeledPrice(label=title, amount=price * 100)]
-
-    bot.answer_callback_query(call.id, "Открываю оплату…")
-    bot.send_invoice(
-        chat_id=chat_id,
-        title=title,
-        description=desc,
-        provider_token=PROVIDER_TOKEN,
-        currency="KZT",
-        prices=prices,
-        start_parameter="premium",
-        payload=payload
+    bot.send_message(
+        chat_id,
+        "💳 <b>Ручная оплата (Kaspi)</b>\n\n"
+        f"План: <b>{PLAN_TITLES[plan]}</b>\n"
+        f"Сумма: <b>{PLAN_PRICES_KZT[plan]} ₸</b>\n\n"
+        "📌 Реквизиты:\n"
+        f"<b>Kaspi:</b> {KASPI_PHONE}\n"
+        f"<b>Имя:</b> {KASPI_NAME}\n\n"
+        "После оплаты нажми <b>💳 Оплатил / Отправить чек</b> и пришли чек (фото или PDF).",
+        reply_markup=payment_kb()
     )
 
+# ===== Telegram Payments handlers (только если PAY_MODE=telegram) =====
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def pre_checkout(pre_checkout_q):
     bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
 
 @bot.message_handler(content_types=["successful_payment"])
 def successful_payment(m):
+    if PAY_MODE != "telegram":
+        return
+
     chat_id = m.chat.id
     payload = (m.successful_payment.invoice_payload or "")
     try:
@@ -1101,10 +1134,105 @@ def successful_payment(m):
     except Exception:
         pass
 
-    bot.send_message(chat_id, "✅ Оплата получена. Но я не смог распознать план. Напиши в поддержку/админу.", reply_markup=menu_kb())
+    bot.send_message(chat_id, "✅ Оплата получена, но план не распознан. Напиши админу.", reply_markup=menu_kb())
 
 # =========================
-# ADMIN grant (ручная выдача)
+# MANUAL RECEIPT HANDLER (photo/pdf)
+# =========================
+@bot.message_handler(content_types=["photo", "document"])
+def receipt_handler(m):
+    chat_id = m.chat.id
+
+    if chat_id not in user_data or user_data[chat_id].get("step") != "wait_receipt":
+        return
+
+    if chat_id not in PENDING_PAYMENTS:
+        bot.send_message(chat_id, "Сначала выбери план в ⭐ Premium.", reply_markup=menu_kb())
+        return
+
+    plan = PENDING_PAYMENTS[chat_id]["plan"]
+    bot.send_message(chat_id, "✅ Чек получен. Отправил на проверку админу. ⏳", reply_markup=menu_kb())
+
+    caption = (
+        "🧾 <b>Новый чек</b>\n"
+        f"User ID: <code>{chat_id}</code>\n"
+        f"План: <b>{PLAN_TITLES[plan]}</b>\n"
+        f"Сумма: <b>{PLAN_PRICES_KZT[plan]} ₸</b>\n\n"
+        "Нажми кнопку ниже:"
+    )
+
+    for admin_id in ADMIN_IDS:
+        try:
+            if m.content_type == "photo":
+                bot.send_photo(
+                    admin_id,
+                    m.photo[-1].file_id,
+                    caption=caption,
+                    reply_markup=admin_review_kb(chat_id, plan)
+                )
+            else:
+                # document (pdf or image file)
+                bot.send_document(
+                    admin_id,
+                    m.document.file_id,
+                    caption=caption,
+                    reply_markup=admin_review_kb(chat_id, plan)
+                )
+        except Exception:
+            pass
+
+    user_data[chat_id]["step"] = "idle"
+    log(chat_id, "manual_receipt_sent", plan)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin:"))
+def admin_decision(call):
+    admin_id = call.message.chat.id
+    if admin_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "Нет доступа")
+        return
+
+    parts = call.data.split(":")
+    if len(parts) < 4:
+        bot.answer_callback_query(call.id, "Ошибка данных")
+        return
+
+    action = parts[1]
+    user_id = int(parts[2])
+    plan = parts[3]
+
+    try:
+        bot.edit_message_reply_markup(admin_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    if action == "approve":
+        set_sub(user_id, plan, PLAN_DAYS[plan])
+        PENDING_PAYMENTS.pop(user_id, None)
+
+        bot.send_message(admin_id, f"✅ Подтверждено. Подписка активирована пользователю <code>{user_id}</code>.")
+        bot.send_message(
+            user_id,
+            f"✅ Оплата подтверждена!\nPremium активирован: <b>{PLAN_TITLES[plan]}</b>",
+            reply_markup=menu_kb()
+        )
+        log(user_id, "manual_pay_approved", plan)
+        bot.answer_callback_query(call.id, "Готово ✅")
+        return
+
+    if action == "reject":
+        PENDING_PAYMENTS.pop(user_id, None)
+        bot.send_message(admin_id, f"❌ Отклонено. Пользователь <code>{user_id}</code>.")
+        bot.send_message(
+            user_id,
+            "❌ Не удалось подтвердить оплату.\nПроверь чек и попробуй снова или напиши админу.",
+            reply_markup=menu_kb()
+        )
+        log(user_id, "manual_pay_rejected", plan)
+        bot.answer_callback_query(call.id, "Ок ❌")
+        return
+
+# =========================
+# ADMIN grant
 # =========================
 @bot.message_handler(commands=["grant"])
 def grant_cmd(m):
@@ -1133,7 +1261,6 @@ def grant_cmd(m):
 if __name__ == "__main__":
     init_db()
     print("Bot started")
-
     try:
         bot.infinity_polling(skip_pending=True, none_stop=True, timeout=60, long_polling_timeout=60)
     except ApiTelegramException as e:
@@ -1141,4 +1268,3 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
-
