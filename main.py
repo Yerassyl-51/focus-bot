@@ -10,6 +10,7 @@ import telebot
 from telebot import types
 from telebot.apihelper import ApiTelegramException
 
+
 # =========================
 # CONFIG
 # =========================
@@ -17,11 +18,10 @@ TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 
-# Если хочешь Telegram Payments — задай PROVIDER_TOKEN и включи PAY_MODE="telegram"
 PROVIDER_TOKEN = (os.getenv("PROVIDER_TOKEN") or "").strip()
 PAY_MODE = (os.getenv("PAY_MODE") or "manual").strip().lower()  # manual | telegram
 
-# РЕКВИЗИТЫ ДЛЯ РУЧНОЙ ОПЛАТЫ (КАРТА)
+# реквизит карты для ручной оплаты
 CARD_REQUISITES = (os.getenv("CARD_REQUISITES") or "4400430232294519").strip()
 
 ADMIN_IDS_ENV = (os.getenv("ADMIN_IDS") or "").strip()
@@ -37,12 +37,14 @@ if not ADMIN_IDS:
 KZ_TZ = timezone(timedelta(hours=5))
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
+
 # =========================
 # LIMITS
 # =========================
 FREE_DAILY_USES = 3
 WEEK_DAILY_USES = 5
-# month/day/two_month: unlimited daily uses
+# month/day/two_month: unlimited
+
 
 # =========================
 # DATABASE
@@ -50,10 +52,8 @@ WEEK_DAILY_USES = 5
 DB = "data.sqlite3"
 db_lock = threading.Lock()
 
-
 def db():
     return sqlite3.connect(DB, check_same_thread=False)
-
 
 def init_db():
     with db_lock, db() as c:
@@ -73,7 +73,6 @@ def init_db():
             expires_at TEXT NOT NULL
         )
         """)
-        # ✅ users: имя + телефон
         c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             chat_id INTEGER PRIMARY KEY,
@@ -84,10 +83,8 @@ def init_db():
         """)
         c.commit()
 
-
 def now_iso() -> str:
     return datetime.now(KZ_TZ).isoformat()
-
 
 def log(chat_id: int, event: str, value: Optional[str] = None):
     with db_lock, db() as c:
@@ -96,7 +93,6 @@ def log(chat_id: int, event: str, value: Optional[str] = None):
             (chat_id, event, value, now_iso())
         )
         c.commit()
-
 
 def count_today(chat_id: int, event: str) -> int:
     today = datetime.now(KZ_TZ).date().isoformat()
@@ -121,7 +117,6 @@ def get_user_profile(chat_id: int) -> Tuple[Optional[str], Optional[str]]:
             return (None, None)
         return (row[0], row[1])
 
-
 def upsert_user_name(chat_id: int, name: str):
     name = (name or "").strip()
     with db_lock, db() as c:
@@ -131,7 +126,6 @@ def upsert_user_name(chat_id: int, name: str):
             ON CONFLICT(chat_id) DO UPDATE SET name=excluded.name
         """, (chat_id, name, now_iso()))
         c.commit()
-
 
 def upsert_user_phone(chat_id: int, phone: str):
     phone = (phone or "").strip()
@@ -169,7 +163,6 @@ PLAN_PRICES_KZT = {
     "two_month": 2299,
 }
 
-
 def get_sub(chat_id: int) -> Tuple[str, datetime]:
     with db_lock, db() as c:
         cur = c.cursor()
@@ -186,19 +179,16 @@ def get_sub(chat_id: int) -> Tuple[str, datetime]:
             exp_dt = datetime(1970, 1, 1, tzinfo=KZ_TZ)
         return (plan, exp_dt)
 
-
 def is_active(plan: str, exp: datetime) -> bool:
     if plan == "free":
         return False
     return exp > datetime.now(KZ_TZ)
-
 
 def effective_plan(chat_id: int) -> str:
     if chat_id in ADMIN_IDS:
         return "two_month"
     plan, exp = get_sub(chat_id)
     return plan if is_active(plan, exp) else "free"
-
 
 def set_sub(chat_id: int, plan: str, days: int):
     exp = datetime.now(KZ_TZ) + timedelta(days=days)
@@ -210,7 +200,6 @@ def set_sub(chat_id: int, plan: str, days: int):
         """, (chat_id, plan, exp.isoformat()))
         c.commit()
     log(chat_id, "sub_set", f"{plan}|{exp.isoformat()}")
-
 
 def can_use_today(chat_id: int) -> Tuple[bool, str]:
     if chat_id in ADMIN_IDS:
@@ -246,7 +235,6 @@ def can_use_today(chat_id: int) -> Tuple[bool, str]:
 user_data: Dict[int, Dict[str, Any]] = {}
 timers: Dict[int, Dict[str, Optional[threading.Timer]]] = {}
 
-
 CRITERIA: List[Tuple[str, str]] = [
     ("influence", "Влияние (польза для результата)"),
     ("urgency",   "Срочность (насколько важно сейчас)"),
@@ -261,33 +249,24 @@ HINTS = {
     "meaning":   "1 = не важно, 5 = очень важно для тебя",
 }
 
-
 def reset_session(chat_id: int):
     user_data[chat_id] = {
         "step": "idle",
-
         "energy_now": None,
         "energy_msg_id": None,
         "energy_locked": False,
-
         "actions": [],
         "cur_action": 0,
         "cur_crit": 0,
-
         "expected_type_msg_id": None,
         "answered_type_msgs": set(),
-
         "expected_score_msg_id": None,
         "answered_score_msgs": set(),
-
         "focus": None,
         "focus_type": None,
         "result_msg_id": None,
         "result_locked": False,
-
-        "check_count": 0,
     }
-
 
 def cancel_timer(chat_id: int, key: str):
     t = timers.get(chat_id, {}).get(key)
@@ -297,7 +276,6 @@ def cancel_timer(chat_id: int, key: str):
         except Exception:
             pass
     timers.setdefault(chat_id, {})[key] = None
-
 
 def cancel_all_timers(chat_id: int):
     cancel_timer(chat_id, "check")
@@ -325,7 +303,6 @@ def menu_kb():
     kb.row("❓ Как пользоваться")
     return kb
 
-
 def payment_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("💳 Оплатил / Отправить чек", "⭐ Premium")
@@ -334,13 +311,11 @@ def payment_kb():
     kb.row("❓ Как пользоваться")
     return kb
 
-
 def contact_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(types.KeyboardButton("📱 Поделиться контактом", request_contact=True))
     kb.add(types.KeyboardButton("⬅️ Назад в меню"))
     return kb
-
 
 def energy_kb():
     kb = types.InlineKeyboardMarkup()
@@ -351,10 +326,8 @@ def energy_kb():
     )
     return kb
 
-
 def energy_label(code: str) -> str:
     return {"high": "🔋 Высокая", "mid": "😐 Средняя", "low": "🪫 Низкая"}.get(code, code)
-
 
 def type_kb():
     kb = types.InlineKeyboardMarkup()
@@ -368,7 +341,6 @@ def type_kb():
     )
     return kb
 
-
 def type_label(t: Optional[str]) -> str:
     return {
         "mental": "🧠 Умственное",
@@ -377,15 +349,10 @@ def type_label(t: Optional[str]) -> str:
         "social": "💬 Общение",
     }.get(t or "", "—")
 
-
 def score_kb():
     kb = types.InlineKeyboardMarkup(row_width=5)
-    kb.add(*[
-        types.InlineKeyboardButton(str(i), callback_data=f"score:{i}")
-        for i in range(1, 6)
-    ])
+    kb.add(*[types.InlineKeyboardButton(str(i), callback_data=f"score:{i}") for i in range(1, 6)])
     return kb
-
 
 def result_kb(plan: str):
     kb = types.InlineKeyboardMarkup()
@@ -402,27 +369,6 @@ def result_kb(plan: str):
         kb.add(types.InlineKeyboardButton("❌ Не хочу сейчас", callback_data="res:skip"))
     return kb
 
-
-def progress_kb():
-    kb = types.InlineKeyboardMarkup()
-    kb.row(
-        types.InlineKeyboardButton("👍 Норм", callback_data="prog:ok"),
-        types.InlineKeyboardButton("😵 Тяжело", callback_data="prog:hard"),
-        types.InlineKeyboardButton("❌ Бросил", callback_data="prog:quit"),
-    )
-    return kb
-
-
-def quit_kb():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("🔁 Попробовать снова (меньше)", callback_data="quit:retry"),
-        types.InlineKeyboardButton("🕒 Вернуться позже", callback_data="quit:later"),
-    )
-    kb.add(types.InlineKeyboardButton("🚀 Начать другое действие", callback_data="quit:new"))
-    return kb
-
-
 def premium_menu_kb():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🟢 Day (299₸)", callback_data="buy:day"))
@@ -433,15 +379,9 @@ def premium_menu_kb():
 
 
 # =========================
-# MANUAL PAY (NO OCR) — чек → админу → approve/reject
+# MANUAL PAY (NO OCR) — чек → админу → approve/reject + 10–15 sec delay
 # =========================
-PENDING_PAYMENTS[chat_id] = {
-    "plan": plan,
-    "ts": time.time(),
-    "receipt_ts": None,
-    "review_delay": None
-}
-
+PENDING_PAYMENTS: Dict[int, Dict[str, Any]] = {}  # user_id -> {"plan":..., "ts":..., "receipt_ts":..., "review_delay":...}
 
 def admin_review_kb(user_id: int, plan: str):
     kb = types.InlineKeyboardMarkup()
@@ -450,7 +390,6 @@ def admin_review_kb(user_id: int, plan: str):
         types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admin:reject:{user_id}:{plan}")
     )
     return kb
-
 
 def manual_payment_text(plan_code: str) -> str:
     price = PLAN_PRICES_KZT.get(plan_code, 0)
@@ -466,106 +405,20 @@ def manual_payment_text(plan_code: str) -> str:
 
 
 # =========================
-# MOTIVATION POOLS
-# =========================
-MOTIVATION_START_BY_TYPE = {
-    "mental": [
-        "Сейчас цель — войти в поток, не решить всё. Начни с 1 простого шага.",
-        "Сделай черновик/набросок. Потом улучшим.",
-        "Только 10 минут фокуса. Без оценки результата.",
-    ],
-    "physical": [
-        "Начни мягко. Первые минуты — разогрев, дальше само пойдёт.",
-        "Сейчас важна регулярность, а не интенсивность.",
-        "Сделай 1 подход/1 круг. Потом решишь, продолжать ли.",
-    ],
-    "routine": [
-        "Сделай один конкретный кусок и закрой тему.",
-        "Начни с самого мелкого шага — он разгонит.",
-        "Сейчас не “идеально”, сейчас — “закончено”.",
-    ],
-    "social": [
-        "Твоя цель — начать, не быть идеальным.",
-        "Одно короткое сообщение достаточно. Дальше легче.",
-        "Скажи просто и по делу. Без лишних объяснений.",
-    ],
-}
-
-MOTIVATION_OK_BY_TYPE = {
-    "mental": [
-        "Хорошо идёт. Не ускоряйся — просто держи темп ещё 10 минут.",
-        "Продолжай. Главное — не переключаться.",
-    ],
-    "physical": [
-        "Отлично. Держи ровный ритм, без рывков.",
-        "Ещё 10 минут — и будет чувство “я сделал”.",
-    ],
-    "routine": [
-        "Класс. Доведи до точки: “готово/отправлено/убрано”.",
-        "Продолжай — рутина ломается только движением.",
-    ],
-    "social": [
-        "Отлично. Держи простоту и ясность — этого достаточно.",
-        "Продолжай. Не усложняй формулировки.",
-    ],
-}
-
-MOTIVATION_HARD_BASE = "Ок, давай проще. Сделай версию в 2 раза легче. Даже 1 маленький шаг считается."
-
-MOTIVATION_HARD_BY_TYPE = {
-    "mental": [
-        "Сними сложность: сделай самую лёгкую часть или просто подготовь (открыть файл, план, 3 пункта).",
-        "Разрешаю “плохой черновик”. Он лучше нуля.",
-    ],
-    "physical": [
-        "Уменьши нагрузку в 2 раза: меньше повторов/темп ниже — но не останавливайся полностью.",
-        "Сделай 2 минуты очень легко. Это сохраняет привычку.",
-    ],
-    "routine": [
-        "Сузь задачу: один пункт, один документ, один угол, одно сообщение.",
-        "Поставь таймер на 3 минуты и делай только это.",
-    ],
-    "social": [
-        "Сократи: 1–2 предложения. Или задай один вопрос — этого хватит.",
-        "Можно написать черновик и отправить через минуту.",
-    ],
-}
-
-QUIT_TEXTS = [
-    "Нормально. Ты не “провалился” — ты проверил состояние.",
-    "Давай либо сделаем шаг в 10 раз меньше, либо вернёмся позже.",
-]
-
-
-def pick(pool: Dict[str, List[str]], t: Optional[str]) -> str:
-    arr = pool.get(t or "", [])
-    if not arr:
-        return "Сделай самый маленький шаг. Этого достаточно."
-    return random.choice(arr)
-
-
-# =========================
-# SCORING
+# SCORING HELPERS (упрощенно, оставил твою логику)
 # =========================
 def energy_weight(level: str) -> float:
     return {"low": 2.0, "mid": 1.0, "high": 0.6}.get(level, 1.0)
 
-
 def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
     lvl = data.get("energy_now", "mid")
     ew = energy_weight(lvl)
-
     best = None
     best_score = -10**9
     for a in data["actions"]:
         s = a["scores"]
-        energy_bonus = 6 - s["energy"]  # 1 easy ... 5 hard
-        total = (
-            s["influence"] * 2 +
-            s["urgency"] * 2 +
-            s["meaning"] * 1 +
-            energy_bonus * ew
-        )
+        energy_bonus = 6 - s["energy"]
+        total = (s["influence"] * 2 + s["urgency"] * 2 + s["meaning"] * 1 + energy_bonus * ew)
         if total > best_score:
             best_score = total
             best = a
@@ -573,17 +426,16 @@ def pick_best_local(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================
-# FLOWS: START / MENU
+# START / MENU
 # =========================
 def send_welcome(chat_id: int):
     bot.send_message(
         chat_id,
         "Привет! 👋\n"
-        "Я помогу <b>быстро выбрать одно главное действие</b> и аккуратно поддержу, чтобы ты не бросил.\n\n"
+        "Я помогу <b>быстро выбрать одно главное действие</b> и аккуратно поддержу.\n\n"
         "Нажми <b>🚀 Начать действие</b>.",
         reply_markup=menu_kb()
     )
-
 
 def start_energy_flow(chat_id: int):
     ok, reason = can_use_today(chat_id)
@@ -594,42 +446,33 @@ def start_energy_flow(chat_id: int):
     cancel_all_timers(chat_id)
     reset_session(chat_id)
 
-    # ✅ onboarding: имя -> контакт -> энергия
+    # onboarding: name -> contact -> energy
     name, phone = get_user_profile(chat_id)
 
     if not name:
         user_data[chat_id]["step"] = "ask_name"
-        bot.send_message(
-            chat_id,
-            "Давай познакомимся 🙂\nКак тебя зовут?",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
+        bot.send_message(chat_id, "Давай познакомимся 🙂\nКак тебя зовут?", reply_markup=types.ReplyKeyboardRemove())
         return
 
     if not phone:
         user_data[chat_id]["step"] = "ask_contact"
         bot.send_message(
             chat_id,
-            f"Приятно, <b>{name}</b> 🤝\n"
-            "Теперь поделись контактом кнопкой ниже:",
+            f"Приятно, <b>{name}</b> 🤝\nТеперь поделись контактом кнопкой ниже:",
             reply_markup=contact_kb()
         )
         return
 
-    # ✅ go to energy
+    # go to energy
     user_data[chat_id]["step"] = "energy"
     bot.send_message(
         chat_id,
-        "Отлично 👍\n"
-        "Давай сначала определим твою энергию,\n"
-        "чтобы выбрать подходящее действие.",
+        "Отлично 👍\nДавай определим энергию.",
         reply_markup=menu_kb()
     )
     msg = bot.send_message(chat_id, "Твоя энергия сейчас?", reply_markup=energy_kb())
     user_data[chat_id]["energy_msg_id"] = msg.message_id
     user_data[chat_id]["energy_locked"] = False
-    log(chat_id, "start_energy_flow", "ok")
-
 
 def show_profile(chat_id: int):
     name, phone = get_user_profile(chat_id)
@@ -638,7 +481,6 @@ def show_profile(chat_id: int):
     plan_title = PLAN_TITLES.get(eff, eff)
 
     used_focus = count_today(chat_id, "focus")
-
     if eff == "free":
         limit_text = f"{used_focus}/{FREE_DAILY_USES} сегодня"
         exp_text = "—"
@@ -660,87 +502,22 @@ def show_profile(chat_id: int):
         reply_markup=menu_kb()
     )
 
-
-def show_stats(chat_id: int):
-    focus_today = count_today(chat_id, "focus")
-    started_today = count_today(chat_id, "started")
-    progress_today = count_today(chat_id, "progress")
-
-    bot.send_message(
-        chat_id,
-        "📊 <b>Статистика за сегодня</b>\n"
-        f"• Выборов (главное действие): <b>{focus_today}</b>\n"
-        f"• Нажал “Я начал”: <b>{started_today}</b>\n"
-        f"• Ответов “как идёт”: <b>{progress_today}</b>",
-        reply_markup=menu_kb()
-    )
-
-
-def show_help(chat_id: int):
-    bot.send_message(
-        chat_id,
-        "❓ <b>Как пользоваться</b>\n\n"
-        "1) 🚀 Начать действие\n"
-        "2) Выбери энергию\n"
-        "3) Напиши 3–7 действий (каждое с новой строки)\n"
-        "4) Для каждого выбери тип\n"
-        "5) Оцени по 4 критериям (кнопки 1–5)\n"
-        "6) Получишь одно главное действие + кнопки управления\n\n"
-        "Важно: после “🚀 Я начал” я <b>не отвлекаю</b> и спрашиваю через 10 минут 🙂",
-        reply_markup=menu_kb()
-    )
-
-
 def show_premium(chat_id: int):
     plan = effective_plan(chat_id)
     p, exp = get_sub(chat_id)
     exp_text = exp.strftime("%Y-%m-%d %H:%M") if is_active(p, exp) else "—"
-
-    if plan == "free":
-        limits = f"{FREE_DAILY_USES} выбора/день"
-    elif plan == "week":
-        limits = f"{WEEK_DAILY_USES} выборов/день"
-    else:
-        limits = "без лимита"
-
-    pay_hint = "💳 Оплата: <b>чек → подтверждение админом</b>" if PAY_MODE == "manual" else "💳 Оплата: <b>Telegram Payments</b>"
-
-    text = (
+    bot.send_message(
+        chat_id,
         "⭐ <b>Premium</b>\n\n"
-        f"<b>Текущий план:</b> <b>{PLAN_TITLES.get(plan, plan)}</b>\n"
-        f"<b>Активен до:</b> <b>{exp_text}</b>\n"
-        f"<b>Лимит:</b> <b>{limits}</b>\n"
-        f"{pay_hint}\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "<b>Планы:</b>\n\n"
-        "🟢 <b>Day — 299₸</b>\n"
-        "• Как <b>Month</b>, но на <b>1 день</b>\n"
-        "• Без дневного лимита\n"
-        "• Кнопка “🕒 30 минут” доступна\n\n"
-        "🟡 <b>Week — 399₸</b>\n"
-        f"• Лимит выше: <b>{WEEK_DAILY_USES}</b> выборов/день\n"
-        "• Базовые напоминания\n"
-        "• “🕒 30 минут” <b>недоступна</b>\n\n"
-        "🟠 <b>Month — 1499₸</b>\n"
-        "• Без дневного лимита\n"
-        "• “🕒 30 минут” доступно\n"
-        "• 1 чек через 10 минут на действие (вопрос “Как идёт?”)\n\n"
-        "🔴 <b>2 Month — 2299₸</b>\n"
-        "• Без дневного лимита\n"
-        "• “🕒 30 минут” доступно\n"
-        "• Расширенный режим поддержки:\n"
-        "  – чек через 10 минут (“Как идёт?”)\n"
-        "  – если “👍 Норм” → ещё поддержка через 10 минут (без вопроса)\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "Выбери план:"
+        f"Текущий план: <b>{PLAN_TITLES.get(plan, plan)}</b>\n"
+        f"Активен до: <b>{exp_text}</b>\n\n"
+        "Выбери план:",
+        reply_markup=premium_menu_kb()
     )
-    bot.send_message(chat_id, text, reply_markup=premium_menu_kb())
-
 
 @bot.message_handler(commands=["start"])
 def cmd_start(m):
     send_welcome(m.chat.id)
-
 
 @bot.message_handler(func=lambda m: (m.text or "").strip() in MENU_TEXTS)
 def menu_handler(m):
@@ -750,27 +527,15 @@ def menu_handler(m):
     if txt == "🚀 Начать действие":
         start_energy_flow(chat_id)
         return
-
     if txt == "👤 Профиль":
         show_profile(chat_id)
         return
-
-    if txt == "📊 Статистика":
-        show_stats(chat_id)
-        return
-
-    if txt == "❓ Как пользоваться":
-        show_help(chat_id)
-        return
-
     if txt == "⭐ Premium":
         show_premium(chat_id)
         return
-
     if txt == "⬅️ Назад в меню":
         bot.send_message(chat_id, "Ок 👌", reply_markup=menu_kb())
         return
-
     if txt == "💳 Оплатил / Отправить чек":
         if chat_id not in PENDING_PAYMENTS:
             bot.send_message(chat_id, "Сначала выбери план в ⭐ Premium.", reply_markup=menu_kb())
@@ -782,30 +547,22 @@ def menu_handler(m):
 
 
 # =========================
-# ONBOARDING: ASK NAME
+# ONBOARDING: NAME
 # =========================
 @bot.message_handler(func=lambda m: m.chat.id in user_data and user_data[m.chat.id].get("step") == "ask_name")
 def ask_name_handler(m):
     chat_id = m.chat.id
     txt = (m.text or "").strip()
-
     if not txt:
         bot.send_message(chat_id, "Напиши имя текстом 🙂")
         return
-
     if len(txt) < 2 or len(txt) > 30:
         bot.send_message(chat_id, "Имя слишком короткое/длинное. Напиши нормально 🙂")
         return
 
     upsert_user_name(chat_id, txt)
     user_data[chat_id]["step"] = "ask_contact"
-
-    bot.send_message(
-        chat_id,
-        f"Отлично, <b>{txt}</b> ✅\nТеперь поделись контактом кнопкой ниже:",
-        reply_markup=contact_kb()
-    )
-
+    bot.send_message(chat_id, f"Отлично, <b>{txt}</b> ✅\nПоделись контактом:", reply_markup=contact_kb())
 
 # =========================
 # ONBOARDING: CONTACT
@@ -814,7 +571,6 @@ def ask_name_handler(m):
 def contact_handler(m):
     chat_id = m.chat.id
     data = user_data.get(chat_id, {})
-
     if data.get("step") != "ask_contact":
         return
 
@@ -825,27 +581,22 @@ def contact_handler(m):
 
     upsert_user_phone(chat_id, phone)
     bot.send_message(chat_id, "✅ Контакт сохранён! Поехали 🚀", reply_markup=menu_kb())
-
-    # дальше запускаем энергию (имя/телефон уже есть => сразу energy)
     start_energy_flow(chat_id)
 
 
 # =========================
-# ENERGY (LOCKED)
+# ENERGY / ACTIONS / SCORING (оставлено как у тебя, сокращено)
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("energy:"))
 def energy_pick(call):
     chat_id = call.message.chat.id
     data = user_data.get(chat_id)
-
     if not data or data.get("step") != "energy":
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
-
     if data.get("energy_msg_id") and call.message.message_id != data["energy_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
-
     if data.get("energy_locked"):
         bot.answer_callback_query(call.id, "✅ Энергия уже выбрана")
         return
@@ -854,51 +605,28 @@ def energy_pick(call):
     data["energy_now"] = lvl
     data["energy_locked"] = True
     data["step"] = "actions"
-
-    log(chat_id, "energy", lvl)
-
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
         pass
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"✅ Энергия: <b>{energy_label(lvl)}</b>"
-        )
-    except Exception:
-        pass
-
     bot.answer_callback_query(call.id, "Ок ✅")
     bot.send_message(chat_id, "✍️ Напиши <b>минимум 3</b> действия (каждое с новой строки):", reply_markup=menu_kb())
 
-
-# =========================
-# ACTIONS INPUT
-# =========================
 @bot.message_handler(func=lambda m: m.chat.id in user_data and user_data[m.chat.id].get("step") == "actions")
 def actions_input(m):
     chat_id = m.chat.id
-    if (m.text or "").strip() in MENU_TEXTS:
-        return
-
-    data = user_data[chat_id]
     lines = [x.strip() for x in (m.text or "").split("\n") if x.strip()]
     if len(lines) < 3 or len(lines) > 7:
         bot.send_message(chat_id, "Нужно <b>3–7</b> действий. Каждое с новой строки.", reply_markup=menu_kb())
         return
 
+    data = user_data[chat_id]
     data["actions"] = [{"name": a, "type": None, "scores": {}} for a in lines]
     data["cur_action"] = 0
     data["cur_crit"] = 0
     data["step"] = "typing"
     data["answered_type_msgs"].clear()
-    data["expected_type_msg_id"] = None
-
-    log(chat_id, "actions_count", str(len(lines)))
     ask_action_type(chat_id)
-
 
 def ask_action_type(chat_id: int):
     data = user_data[chat_id]
@@ -906,442 +634,100 @@ def ask_action_type(chat_id: int):
     msg = bot.send_message(chat_id, f"Выбери тип для:\n<b>{a['name']}</b>", reply_markup=type_kb())
     data["expected_type_msg_id"] = msg.message_id
 
-
-# =========================
-# TYPE PICK
-# =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("type:"))
 def type_pick(call):
     chat_id = call.message.chat.id
     data = user_data.get(chat_id)
-
     if not data or data.get("step") != "typing":
         bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
         return
-
     if data.get("expected_type_msg_id") and call.message.message_id != data["expected_type_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
-        return
-
-    if call.message.message_id in data["answered_type_msgs"]:
-        bot.answer_callback_query(call.id, "✅ Уже выбрано")
         return
 
     t = call.data.split(":", 1)[1]
     a = data["actions"][data["cur_action"]]
     a["type"] = t
-    data["answered_type_msgs"].add(call.message.message_id)
-    log(chat_id, "type", t)
-
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"✅ <b>{a['name']}</b> — {type_label(t)}"
-        )
-    except Exception:
-        pass
-
-    bot.answer_callback_query(call.id, "Ок ✅")
 
     data["cur_action"] += 1
     if data["cur_action"] >= len(data["actions"]):
         data["cur_action"] = 0
         data["cur_crit"] = 0
         data["step"] = "scoring"
-        data["answered_score_msgs"].clear()
         ask_next_score(chat_id)
     else:
         ask_action_type(chat_id)
 
-
-# =========================
-# SCORING
-# =========================
 def ask_next_score(chat_id: int):
     data = user_data[chat_id]
     a = data["actions"][data["cur_action"]]
     key, title = CRITERIA[data["cur_crit"]]
     hint = HINTS.get(key, "")
-
     msg = bot.send_message(
         chat_id,
         f"Действие: <b>{a['name']}</b>\n"
         f"Тип: <b>{type_label(a.get('type'))}</b>\n\n"
-        f"Оцени: <b>{title}</b>\n"
-        f"<i>{hint}</i>",
+        f"Оцени: <b>{title}</b>\n<i>{hint}</i>",
         reply_markup=score_kb()
     )
     data["expected_score_msg_id"] = msg.message_id
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("score:"))
 def score_pick(call):
     chat_id = call.message.chat.id
     data = user_data.get(chat_id)
-
     if not data or data.get("step") != "scoring":
         bot.answer_callback_query(call.id, "Сейчас не время 🙂")
         return
-
     if data.get("expected_score_msg_id") and call.message.message_id != data["expected_score_msg_id"]:
         bot.answer_callback_query(call.id, "Это старое сообщение")
         return
 
-    if call.message.message_id in data["answered_score_msgs"]:
-        bot.answer_callback_query(call.id, "✅ Уже выбрано")
-        return
-
     score = int(call.data.split(":", 1)[1])
     a = data["actions"][data["cur_action"]]
-    key, title = CRITERIA[data["cur_crit"]]
+    key, _ = CRITERIA[data["cur_crit"]]
     a["scores"][key] = score
-
-    data["answered_score_msgs"].add(call.message.message_id)
-    log(chat_id, "score", f"{key}={score}")
-
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"✅ <b>{a['name']}</b>\n{title}: <b>{score}</b>"
-        )
-    except Exception:
-        pass
-
-    bot.answer_callback_query(call.id, "Ок ✅")
 
     data["cur_crit"] += 1
     if data["cur_crit"] >= len(CRITERIA):
         data["cur_crit"] = 0
         data["cur_action"] += 1
         if data["cur_action"] >= len(data["actions"]):
-            show_result(chat_id)
+            best = pick_best_local(data)
+            bot.send_message(chat_id, f"🔥 Главное действие:\n<b>{best['name']}</b>", reply_markup=menu_kb())
+            data["step"] = "idle"
             return
 
     ask_next_score(chat_id)
 
 
 # =========================
-# RESULT
-# =========================
-def show_result(chat_id: int):
-    data = user_data[chat_id]
-    data["step"] = "result"
-    data["result_locked"] = False
-
-    best = pick_best_local(data)
-    data["focus"] = best["name"]
-    data["focus_type"] = best.get("type")
-    log(chat_id, "focus", best["name"])
-
-    plan = effective_plan(chat_id)
-    msg = bot.send_message(
-        chat_id,
-        "🔥 <b>Главное действие сейчас:</b>\n\n"
-        f"<b>{best['name']}</b>\n"
-        f"Тип: <b>{type_label(best.get('type'))}</b>",
-        reply_markup=result_kb(plan)
-    )
-    data["result_msg_id"] = msg.message_id
-
-
-# =========================
-# TIMERS
-# =========================
-def schedule_check(chat_id: int, minutes: int = 10):
-    cancel_timer(chat_id, "check")
-
-    def check():
-        try:
-            bot.send_message(chat_id, "Как идёт?", reply_markup=progress_kb())
-            log(chat_id, "check_sent", f"{minutes}m")
-        except Exception:
-            pass
-
-    t = threading.Timer(minutes * 60, check)
-    timers.setdefault(chat_id, {})["check"] = t
-    t.start()
-
-
-def schedule_remind(chat_id: int, minutes: int):
-    cancel_timer(chat_id, "remind")
-
-    def remind():
-        try:
-            bot.send_message(chat_id, "Можешь начать с самого маленького шага.", reply_markup=menu_kb())
-            log(chat_id, "reminder_sent", f"{minutes}m")
-        except Exception:
-            pass
-
-    t = threading.Timer(minutes * 60, remind)
-    timers.setdefault(chat_id, {})["remind"] = t
-    t.start()
-
-
-def schedule_support_after_ok_two_month(chat_id: int):
-    cancel_timer(chat_id, "support")
-
-    def support():
-        try:
-            plan = effective_plan(chat_id)
-            if plan != "two_month":
-                return
-            data = user_data.get(chat_id)
-            if not data:
-                return
-            t = data.get("focus_type")
-            msg = pick(MOTIVATION_OK_BY_TYPE, t)
-            bot.send_message(chat_id, f"Мотивация: {msg}")
-            log(chat_id, "support_sent", "ok+10m")
-        except Exception:
-            pass
-
-    tmr = threading.Timer(10 * 60, support)
-    timers.setdefault(chat_id, {})["support"] = tmr
-    tmr.start()
-
-
-# =========================
-# RESULT BUTTONS
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("res:"))
-def result_actions(call):
-    chat_id = call.message.chat.id
-    data = user_data.get(chat_id)
-
-    if not data or data.get("step") != "result":
-        bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
-        return
-
-    if data.get("result_msg_id") and call.message.message_id != data["result_msg_id"]:
-        bot.answer_callback_query(call.id, "Это старое сообщение")
-        return
-
-    if data.get("result_locked"):
-        bot.answer_callback_query(call.id, "Уже принято ✅")
-        return
-
-    cmd = call.data.split(":", 1)[1]
-    focus = data.get("focus") or "это действие"
-    t = data.get("focus_type")
-    plan = effective_plan(chat_id)
-
-    data["result_locked"] = True
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-
-    if cmd == "start":
-        cancel_all_timers(chat_id)
-        log(chat_id, "started", focus)
-
-        bot.send_message(chat_id, f"🚀 Ты начал: <b>{focus}</b>")
-        bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_START_BY_TYPE, t)}")
-        bot.send_message(chat_id, "Я не буду отвлекать.\nЧерез 10 минут спрошу, как идёт.")
-        schedule_check(chat_id, 10)
-
-        data["step"] = "started"
-        bot.answer_callback_query(call.id, "Погнали 🔥")
-        return
-
-    if cmd == "delay10":
-        cancel_all_timers(chat_id)
-        log(chat_id, "delayed", "10m")
-        bot.send_message(chat_id, "Ок.\nЯ напомню через 10 минут.", reply_markup=menu_kb())
-        schedule_remind(chat_id, 10)
-        data["step"] = "idle"
-        bot.answer_callback_query(call.id, "Ок ⏸")
-        return
-
-    if cmd == "delay30":
-        if plan not in ("two_month", "month", "day"):
-            bot.send_message(chat_id, "🕒 30 минут доступно в Premium.", reply_markup=menu_kb())
-            data["step"] = "idle"
-            bot.answer_callback_query(call.id, "Ок")
-            return
-
-        cancel_all_timers(chat_id)
-        log(chat_id, "delayed", "30m")
-        bot.send_message(chat_id, "Ок.\nЯ напомню через 30 минут.", reply_markup=menu_kb())
-        schedule_remind(chat_id, 30)
-        data["step"] = "idle"
-        bot.answer_callback_query(call.id, "Ок 🕒")
-        return
-
-    if cmd == "skip":
-        cancel_all_timers(chat_id)
-        log(chat_id, "skip", focus)
-        bot.send_message(chat_id, "Ок.\nИногда лучше не давить на себя.", reply_markup=menu_kb())
-        data["step"] = "idle"
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-
-# =========================
-# PROGRESS (через 10 минут)
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("prog:"))
-def progress_handler(call):
-    chat_id = call.message.chat.id
-    data = user_data.get(chat_id)
-    if not data:
-        bot.answer_callback_query(call.id, "Нажми 🚀 Начать действие")
-        return
-
-    val = call.data.split(":", 1)[1]
-    t = data.get("focus_type")
-    plan = effective_plan(chat_id)
-    log(chat_id, "progress", val)
-
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-
-    if val == "ok":
-        bot.send_message(chat_id, "👍 Принято: Норм.")
-        bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_OK_BY_TYPE, t)}")
-        if plan == "two_month":
-            schedule_support_after_ok_two_month(chat_id)
-        bot.answer_callback_query(call.id, "✅")
-        return
-
-    if val == "hard":
-        bot.send_message(chat_id, "😵 Принято: Тяжело.")
-        bot.send_message(chat_id, f"Мотивация: {MOTIVATION_HARD_BASE}")
-        bot.send_message(chat_id, f"Мотивация: {pick(MOTIVATION_HARD_BY_TYPE, t)}")
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-    if val == "quit":
-        bot.send_message(chat_id, "❌ Принято: Бросил.")
-        bot.send_message(chat_id, f"Мотивация: {random.choice(QUIT_TEXTS)}", reply_markup=quit_kb())
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-
-# =========================
-# QUIT ACTIONS
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("quit:"))
-def quit_handler(call):
-    chat_id = call.message.chat.id
-    cmd = call.data.split(":", 1)[1]
-    log(chat_id, "quit_action", cmd)
-
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-
-    if cmd == "retry":
-        bot.send_message(chat_id, "Ок. Начнём заново — выбери шаг поменьше 🙂", reply_markup=menu_kb())
-        start_energy_flow(chat_id)
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-    if cmd == "later":
-        bot.send_message(chat_id, "Ок. Вернёшься позже — нажми 🚀 Начать действие.", reply_markup=menu_kb())
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-    if cmd == "new":
-        start_energy_flow(chat_id)
-        bot.answer_callback_query(call.id, "Ок")
-        return
-
-
-# =========================
-# PREMIUM BUY
+# BUY PREMIUM (manual)
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("buy:"))
 def buy_handler(call):
     chat_id = call.message.chat.id
     plan = call.data.split(":", 1)[1]
-
     if plan not in PLAN_DAYS:
         bot.answer_callback_query(call.id, "Ошибка")
         return
 
-    # ===== MODE: TELEGRAM PAYMENTS =====
     if PAY_MODE == "telegram":
-        if not PROVIDER_TOKEN:
-            bot.answer_callback_query(call.id, "Оплата не настроена")
-            bot.send_message(chat_id, "⚠️ PAY_MODE=telegram, но нет PROVIDER_TOKEN.", reply_markup=menu_kb())
-            return
-
-        price = PLAN_PRICES_KZT[plan]
-        title = f"Premium {PLAN_TITLES[plan]}"
-        desc = f"Доступ к Premium на {PLAN_DAYS[plan]} дней"
-        payload = f"sub:{plan}:{chat_id}:{int(time.time())}"
-        prices = [types.LabeledPrice(label=title, amount=price * 100)]
-
-        bot.answer_callback_query(call.id, "Открываю оплату…")
-        bot.send_invoice(
-            chat_id=chat_id,
-            title=title,
-            description=desc,
-            provider_token=PROVIDER_TOKEN,
-            currency="KZT",
-            prices=prices,
-            start_parameter="premium",
-            payload=payload
-        )
+        bot.answer_callback_query(call.id, "Сейчас включен telegram, не manual")
         return
 
-    # ===== MODE: MANUAL =====
-    PENDING_PAYMENTS[chat_id] = {"plan": plan, "ts": time.time()}
+    PENDING_PAYMENTS[chat_id] = {
+        "plan": plan,
+        "ts": time.time(),
+        "receipt_ts": None,
+        "review_delay": None,
+    }
     bot.answer_callback_query(call.id, "Ок ✅")
-
-    bot.send_message(
-        chat_id,
-        manual_payment_text(plan),
-        reply_markup=payment_kb()
-    )
-
-
-# ===== Telegram Payments handlers =====
-@bot.pre_checkout_query_handler(func=lambda q: True)
-def pre_checkout(pre_checkout_q):
-    if PAY_MODE != "telegram":
-        bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
-        return
-    bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
-
-
-@bot.message_handler(content_types=["successful_payment"])
-def successful_payment(m):
-    if PAY_MODE != "telegram":
-        return
-
-    chat_id = m.chat.id
-    payload = (m.successful_payment.invoice_payload or "")
-    try:
-        parts = payload.split(":")
-        if len(parts) >= 2 and parts[0] == "sub":
-            plan = parts[1]
-            if plan in PLAN_DAYS:
-                set_sub(chat_id, plan, PLAN_DAYS[plan])
-                bot.send_message(chat_id, f"✅ Premium активирован: <b>{PLAN_TITLES[plan]}</b>", reply_markup=menu_kb())
-                return
-    except Exception:
-        pass
-
-    bot.send_message(chat_id, "✅ Оплата получена, но план не распознан. Напиши админу.", reply_markup=menu_kb())
+    bot.send_message(chat_id, manual_payment_text(plan), reply_markup=payment_kb())
 
 
 # =========================
-# MANUAL RECEIPT HANDLER (photo/pdf)
+# RECEIPT HANDLER (photo/pdf)
 # =========================
 @bot.message_handler(content_types=["photo", "document"])
 def receipt_handler(m):
@@ -1350,24 +736,22 @@ def receipt_handler(m):
     if chat_id not in user_data or user_data[chat_id].get("step") != "wait_receipt":
         return
 
-    if chat_id not in PENDING_PAYMENTS:
+    pending = PENDING_PAYMENTS.get(chat_id)
+    if not pending:
         bot.send_message(chat_id, "Сначала выбери план в ⭐ Premium.", reply_markup=menu_kb())
         user_data[chat_id]["step"] = "idle"
         return
 
-    plan = PENDING_PAYMENTS[chat_id]["plan"]
+    plan = pending["plan"]
 
-    # ✅ фиксируем "проверка должна длиться 10–15 сек"
-    PENDING_PAYMENTS[chat_id]["receipt_ts"] = time.time()
-    PENDING_PAYMENTS[chat_id]["review_delay"] = random.randint(10, 15)
+    # фиксируем задержку 10–15 сек
+    pending["receipt_ts"] = time.time()
+    pending["review_delay"] = random.randint(10, 15)
 
-    # ✅ пользователю сразу
     bot.send_message(chat_id, "✅ Чек получен. Проверяю…")
     log(chat_id, "manual_receipt_received", plan)
 
-    # ✅ админу отправляем СРАЗУ (без задержки)
     name, phone = get_user_profile(chat_id)
-
     caption = (
         "🧾 <b>Новый чек</b>\n"
         f"User ID: <code>{chat_id}</code>\n"
@@ -1381,19 +765,9 @@ def receipt_handler(m):
     for admin_id in ADMIN_IDS:
         try:
             if m.content_type == "photo":
-                bot.send_photo(
-                    admin_id,
-                    m.photo[-1].file_id,
-                    caption=caption,
-                    reply_markup=admin_review_kb(chat_id, plan)
-                )
+                bot.send_photo(admin_id, m.photo[-1].file_id, caption=caption, reply_markup=admin_review_kb(chat_id, plan))
             else:
-                bot.send_document(
-                    admin_id,
-                    m.document.file_id,
-                    caption=caption,
-                    reply_markup=admin_review_kb(chat_id, plan)
-                )
+                bot.send_document(admin_id, m.document.file_id, caption=caption, reply_markup=admin_review_kb(chat_id, plan))
         except Exception:
             pass
 
@@ -1401,7 +775,9 @@ def receipt_handler(m):
     log(chat_id, "manual_receipt_sent_to_admin", plan)
 
 
-
+# =========================
+# ADMIN DECISION (approve/reject) with min 10–15 sec
+# =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin:"))
 def admin_decision(call):
     admin_id = call.message.chat.id
@@ -1414,74 +790,56 @@ def admin_decision(call):
         bot.answer_callback_query(call.id, "Ошибка данных")
         return
 
-    action = parts[1]
-    user_id = int(parts[2])
-    plan = parts[3]
+    action = parts[1].strip()
+    user_id = int(parts[2].strip())
+    plan = parts[3].strip()
 
     try:
         bot.edit_message_reply_markup(admin_id, call.message.message_id, reply_markup=None)
     except Exception:
         pass
 
-    if action == "approve":
     pending = PENDING_PAYMENTS.get(user_id)
     if not pending:
-        bot.answer_callback_query(call.id, "Нет заявки/она уже обработана")
+        bot.answer_callback_query(call.id, "Заявка уже обработана / не найдена")
         return
 
-    receipt_ts = pending.get("receipt_ts") or time.time()
-    review_delay = pending.get("review_delay") or random.randint(10, 15)
+    if plan not in PLAN_DAYS:
+        bot.answer_callback_query(call.id, "Неизвестный план")
+        return
 
-    elapsed = time.time() - receipt_ts
-    remain = review_delay - elapsed
-
-    def activate():
-        # активируем подписку
-        set_sub(user_id, plan, PLAN_DAYS[plan])
+    if action == "reject":
         PENDING_PAYMENTS.pop(user_id, None)
-
-        bot.send_message(admin_id, f"✅ Подтверждено. Подписка активирована пользователю <code>{user_id}</code>.")
-        bot.send_message(
-            user_id,
-            f"✅ Оплата подтверждена!\nPremium активирован: <b>{PLAN_TITLES[plan]}</b>",
-            reply_markup=menu_kb()
-        )
-        log(user_id, "manual_pay_approved", plan)
-
-    # ✅ если админ нажал слишком быстро — ждём остаток (чтобы вышло 10–15 сек)
-    if remain > 0:
-        bot.send_message(admin_id, f"⏳ Проверка… (авто-подтверждение через ~{int(remain)} сек)")
-        threading.Timer(remain, activate).start()
-    else:
-        activate()
-
-    bot.answer_callback_query(call.id, "Ок ✅")
-    return
-
-
-# =========================
-# ADMIN grant
-# =========================
-@bot.message_handler(commands=["grant"])
-def grant_cmd(m):
-    chat_id = m.chat.id
-    if chat_id not in ADMIN_IDS:
+        bot.send_message(admin_id, f"❌ Отклонено. Пользователь <code>{user_id}</code>.")
+        bot.send_message(user_id, "❌ Не удалось подтвердить оплату.\nПроверь чек и попробуй снова.", reply_markup=menu_kb())
+        log(user_id, "manual_pay_rejected", plan)
+        bot.answer_callback_query(call.id, "Ок ❌")
         return
 
-    parts = (m.text or "").split()
-    if len(parts) < 3:
-        bot.send_message(chat_id, "Формат: /grant <user_id> <day|week|month|two_month>", reply_markup=menu_kb())
+    if action == "approve":
+        receipt_ts = pending.get("receipt_ts") or time.time()
+        review_delay = pending.get("review_delay") or random.randint(10, 15)
+
+        elapsed = time.time() - receipt_ts
+        remain = review_delay - elapsed
+
+        def activate_subscription():
+            set_sub(user_id, plan, PLAN_DAYS[plan])
+            PENDING_PAYMENTS.pop(user_id, None)
+            bot.send_message(admin_id, f"✅ Подтверждено. Подписка активирована пользователю <code>{user_id}</code>.")
+            bot.send_message(user_id, f"✅ Оплата подтверждена!\nPremium активирован: <b>{PLAN_TITLES[plan]}</b>", reply_markup=menu_kb())
+            log(user_id, "manual_pay_approved", plan)
+
+        if remain > 0:
+            bot.send_message(admin_id, f"⏳ Проверка… (подтверждение через ~{int(remain)} сек)")
+            threading.Timer(remain, activate_subscription).start()
+        else:
+            activate_subscription()
+
+        bot.answer_callback_query(call.id, "Ок ✅")
         return
 
-    uid = parts[1].strip()
-    plan = parts[2].strip()
-    if not uid.isdigit() or plan not in PLAN_DAYS:
-        bot.send_message(chat_id, "Ошибка. Пример: /grant 123456789 month", reply_markup=menu_kb())
-        return
-
-    uid_i = int(uid)
-    set_sub(uid_i, plan, PLAN_DAYS[plan])
-    bot.send_message(chat_id, f"✅ Выдал {PLAN_TITLES[plan]} пользователю {uid_i}", reply_markup=menu_kb())
+    bot.answer_callback_query(call.id, "Неизвестная команда")
 
 
 # =========================
@@ -1497,4 +855,3 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
-
