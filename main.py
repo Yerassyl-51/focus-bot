@@ -435,7 +435,13 @@ def premium_menu_kb():
 # =========================
 # MANUAL PAY (NO OCR) — чек → админу → approve/reject
 # =========================
-PENDING_PAYMENTS: Dict[int, Dict[str, Any]] = {}  # user_id -> {"plan":..., "ts":...}
+PENDING_PAYMENTS[chat_id] = {
+    "plan": plan,
+    "ts": time.time(),
+    "receipt_ts": None,
+    "review_delay": None
+}
+
 
 def admin_review_kb(user_id: int, plan: str):
     kb = types.InlineKeyboardMarkup()
@@ -1351,11 +1357,22 @@ def receipt_handler(m):
 
     plan = PENDING_PAYMENTS[chat_id]["plan"]
 
-    bot.send_message(chat_id, "✅ Чек получен. Отправил на проверку админу. ⏳", reply_markup=menu_kb())
+    # ✅ фиксируем "проверка должна длиться 10–15 сек"
+    PENDING_PAYMENTS[chat_id]["receipt_ts"] = time.time()
+    PENDING_PAYMENTS[chat_id]["review_delay"] = random.randint(10, 15)
+
+    # ✅ пользователю сразу
+    bot.send_message(chat_id, "✅ Чек получен. Проверяю…")
+    log(chat_id, "manual_receipt_received", plan)
+
+    # ✅ админу отправляем СРАЗУ (без задержки)
+    name, phone = get_user_profile(chat_id)
 
     caption = (
         "🧾 <b>Новый чек</b>\n"
         f"User ID: <code>{chat_id}</code>\n"
+        f"Имя: <b>{name or '—'}</b>\n"
+        f"Телефон: <b>{phone or '—'}</b>\n"
         f"План: <b>{PLAN_TITLES[plan]}</b>\n"
         f"Сумма: <b>{PLAN_PRICES_KZT[plan]} ₸</b>\n\n"
         "Нажми кнопку ниже:"
@@ -1381,7 +1398,8 @@ def receipt_handler(m):
             pass
 
     user_data[chat_id]["step"] = "idle"
-    log(chat_id, "manual_receipt_sent", plan)
+    log(chat_id, "manual_receipt_sent_to_admin", plan)
+
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin:"))
@@ -1406,6 +1424,19 @@ def admin_decision(call):
         pass
 
     if action == "approve":
+    pending = PENDING_PAYMENTS.get(user_id)
+    if not pending:
+        bot.answer_callback_query(call.id, "Нет заявки/она уже обработана")
+        return
+
+    receipt_ts = pending.get("receipt_ts") or time.time()
+    review_delay = pending.get("review_delay") or random.randint(10, 15)
+
+    elapsed = time.time() - receipt_ts
+    remain = review_delay - elapsed
+
+    def activate():
+        # активируем подписку
         set_sub(user_id, plan, PLAN_DAYS[plan])
         PENDING_PAYMENTS.pop(user_id, None)
 
@@ -1416,20 +1447,16 @@ def admin_decision(call):
             reply_markup=menu_kb()
         )
         log(user_id, "manual_pay_approved", plan)
-        bot.answer_callback_query(call.id, "Готово ✅")
-        return
 
-    if action == "reject":
-        PENDING_PAYMENTS.pop(user_id, None)
-        bot.send_message(admin_id, f"❌ Отклонено. Пользователь <code>{user_id}</code>.")
-        bot.send_message(
-            user_id,
-            "❌ Не удалось подтвердить оплату.\nПроверь чек и попробуй снова или напиши админу.",
-            reply_markup=menu_kb()
-        )
-        log(user_id, "manual_pay_rejected", plan)
-        bot.answer_callback_query(call.id, "Ок ❌")
-        return
+    # ✅ если админ нажал слишком быстро — ждём остаток (чтобы вышло 10–15 сек)
+    if remain > 0:
+        bot.send_message(admin_id, f"⏳ Проверка… (авто-подтверждение через ~{int(remain)} сек)")
+        threading.Timer(remain, activate).start()
+    else:
+        activate()
+
+    bot.answer_callback_query(call.id, "Ок ✅")
+    return
 
 
 # =========================
@@ -1470,3 +1497,4 @@ if __name__ == "__main__":
             print("409 conflict: another instance is running. Stop the other instance and restart.")
             raise
         raise
+
